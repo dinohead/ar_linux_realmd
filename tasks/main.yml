@@ -1,0 +1,65 @@
+---
+
+- name: PACKAGE | Install required packages
+  become: true
+  become_user: root
+  package:
+    name: '{{ linux_realmd_packages }}'
+    state: present
+
+#- name: SHELL | Join the realm
+#  become: true
+#  become_user: root
+#  shell: 'printf "{{ linux_realmd_ad_password}}\n{{ linux_realmd_ad_password }}\n" | realm join -v -U {{ linux_realmd_ad_user }} {{ linux_realmd_domain }}'
+
+- name: Install pexpect using pip
+  become: true
+  become_user: root
+  pip:
+    name: pexpect
+
+- name: Check if machine is bound
+  become: true
+  become_user: root
+  shell: /bin/bash -c "realm list | grep sssd"
+  register: linux_realmd_bound
+  changed_when: false
+  ignore_errors: true
+
+- debug:
+    var: linux_realmd_bound
+
+- name: Join system to AD
+  become: true
+  become_user: root
+  expect:
+    command: /bin/bash -c "/usr/sbin/realm join --user={{ linux_realmd_ad_user }} {{ linux_realmd_domain }}"
+    responses:
+      Password for *: "{{ linux_realmd_ad_password }}"
+  when: linux_realmd_bound.failed
+  register: task_result_1
+
+- name: LINEINFILE | Edit some files to make to make it possible to log in as domain user
+  become: true
+  become_user: root
+  lineinfile:
+    path: "{{ item.path }}"
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+  with_items:
+    - { path: /etc/sssd/sssd.conf, regexp: 'fallback_homedir', line: 'fallback_homedir = /home/%u' }
+    - { path: /etc/sssd/sssd.conf, regexp: 'use_fully_qualified_names', line: 'use_fully_qualified_names = False' }
+    - { path: /etc/ssh/sshd_config, regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication yes' }
+  register: task_result_2
+
+- name: SYSTEMD | Restart services
+  become: true
+  become_user: root
+  systemd:
+    name: "{{ item }}"
+    state: restarted
+  with_items:
+    - sssd
+    - sshd
+    - realmd
+  when: task_result_1.changed or task_result_2.changed
