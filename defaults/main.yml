@@ -3,3 +3,4 @@ linux_realmd_ad_user: user
 linux_realmd_ad_password: CHANGEME
 linux_realmd_domain: domain.com
 linux_realmd_packages: ['sssd', 'realmd', 'pam_krb5', 'krb5-workstation', 'oddjob', 'oddjob-mkhomedir', 'adcli', 'samba-common', 'samba-common-tools', 'ntpdate', 'ntp', 'python-pip']
+linux_realmd_state: joined

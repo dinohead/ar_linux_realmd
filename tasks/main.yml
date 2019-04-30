@@ -36,8 +36,18 @@
     command: /bin/bash -c "/usr/sbin/realm join --user={{ linux_realmd_ad_user }} {{ linux_realmd_domain }}"
     responses:
       Password for *: "{{ linux_realmd_ad_password }}"
-  when: linux_realmd_bound.failed
+  when: linux_realmd_bound.failed and linux_realmd_state == 'joined'
   register: task_result_1
+
+- name: Leave the Domain
+  become: true
+  become_user: root
+  expect:
+    command: /bin/bash -c "/usr/sbin/realm leave --user={{ ad_user }}@{{ domain_name | upper }} {{ domain_name }}"
+    responses:
+      Password for *: "{{ linux_realmd_ad_password }}"
+  register: task_result_3
+  when: not linux_realmd_bound.failed and linux_realmd_state == 'unbind'
 
 - name: LINEINFILE | Edit some files to make to make it possible to log in as domain user
   become: true
@@ -51,6 +61,7 @@
     - { path: /etc/sssd/sssd.conf, regexp: 'use_fully_qualified_names', line: 'use_fully_qualified_names = False' }
     - { path: /etc/ssh/sshd_config, regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication yes' }
   register: task_result_2
+  when: linux_realmd_state == 'joined'
 
 - name: SYSTEMD | Restart services
   become: true
@@ -62,4 +73,41 @@
     - sssd
     - sshd
     - realmd
-  when: task_result_1.changed or task_result_2.changed
+  when: (task_result_1.changed or task_result_2.changed) and linux_realmd_state == 'joined'
+
+- name: SYSTEMD | Stop and restart services
+  become: true
+  become_user: root
+  systemd:
+    name: "{{ item.name }}"
+    state: "{{ item.state }}"
+  with_items:
+    - { name: 'realmd', state: 'stopped' }
+    - { name: 'sssd', state: 'stopped' }
+    - { name: 'sshd', state: 'restarted' }
+  when: task_result_3.changed and linux_realmd_state == 'unbind'
+
+- name: SYSTEMD | Ensure services are started and enabled
+  become: true
+  become_user: root
+  systemd:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  with_items:
+    - sssd
+    - sshd
+    - realmd
+  when: linux_realmd_state == 'joined'
+
+- name: SYSTEMD | Disable realmd and ssd services and ensure sshd is enabled
+  become: true
+  become_user: root
+  systemd:
+    name: "{{ item.name }}"
+    enabled: "{{ item.enabled }}"
+  with_items:
+    - { name: 'realmd', enabled: 'false', state: 'stopped' }
+    - { name: 'sssd', enabled: 'false', state: 'stopped' }
+    - { name: 'sshd', enabled: 'true', state: 'started'  }
+  when: linux_realmd_state == 'unbind'
